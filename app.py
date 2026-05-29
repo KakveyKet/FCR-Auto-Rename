@@ -9,12 +9,13 @@ st.set_page_config(page_title="PDF Invoice Extractor & Splitter", layout="wide")
 st.title("📄 PDF Invoice Extractor & Splitter")
 st.markdown("Upload PDF(s) → Extract invoice numbers → Download each invoice as separate PDF")
 
-st.info("💡 Handles ALL fragmentation patterns including 'C2' + newline + '60244'")
+st.info("💡 Handles fragmentation: 'C26149' + newline + '0' → 'C261490'")
+st.info("🎯 ONLY extracts complete invoice numbers (C26-C29, 6-7 total characters)")
 
 # File uploader
 uploaded_files = st.file_uploader(
     "Choose PDF files", 
-    type="pdf", 
+    type="pdf",
     accept_multiple_files=True
 )
 
@@ -25,87 +26,87 @@ with col1:
 with col2:
     custom_suffix = st.text_input("Custom suffix (optional)", value="FCR", placeholder="FCR")
 
+def is_valid_invoice_range(invoice_num):
+    """Check if invoice number starts with C26, C27, C28, or C29"""
+    match = re.search(r'C(\d{2})', invoice_num.upper())
+    if match:
+        first_two = int(match.group(1))
+        if first_two in [26, 27, 28, 29]:
+            return 6 <= len(invoice_num) <= 7
+    return False
+
 def extract_invoice_numbers(text):
-    """
-    Extract ONLY invoice numbers from PDF text
-    Handles fragmentation like "C2\n60244" -> "C260244"
-    """
+    """Extract ONLY invoice numbers from PDF text"""
     invoice_numbers = set()
     
-    # Method 1: Look for pattern with line break between C and digits
-    line_break_pattern = r'C(\d{1,2})\s*\n\s*(\d{3,})'
+    # Handle INV.NO.Cxxxxx with number on next line
+    inv_split_pattern = r'INV\.NO\.C(\d+)\s*\n\s*(\d+)'
+    matches = re.findall(inv_split_pattern, text, re.IGNORECASE)
+    for match in matches:
+        full_number = f"C{match[0]}{match[1]}"
+        if 6 <= len(full_number) <= 7 and is_valid_invoice_range(full_number):
+            invoice_numbers.add(full_number)
+    
+    # Look for pattern with line break
+    line_break_pattern = r'C(\d{3,5})\s*\n\s*(\d{1,3})'
     matches = re.findall(line_break_pattern, text, re.IGNORECASE)
     for match in matches:
         full_number = f"C{match[0]}{match[1]}"
-        invoice_numbers.add(full_number)
-    
-    # Method 2: Look for pattern with space between C and digits
-    space_pattern = r'C(\d{1,2})\s+(\d{3,})'
-    matches = re.findall(space_pattern, text, re.IGNORECASE)
-    for match in matches:
-        full_number = f"C{match[0]}{match[1]}"
-        invoice_numbers.add(full_number)
-    
-    # Method 3: Remove ALL whitespace and find C followed by 5+ digits
-    text_no_whitespace = re.sub(r'\s+', '', text)
-    all_c_numbers = re.findall(r'C\d{5,}', text_no_whitespace)
-    invoice_numbers.update(all_c_numbers)
-    
-    # Method 4: Look for INV.NO pattern specifically
-    inv_patterns = [
-        r'INV\.NO\.C(\d{1,2})\s*\n\s*(\d{3,})',
-        r'INV\.NO\.\s*C(\d{1,2})\s*\n\s*(\d{3,})',
-        r'INV\.NO\.C(\d{1,2})\s+(\d{3,})',
-        r'V\.NO\.C(\d{1,2})\s*\n\s*(\d{3,})',
-    ]
-    
-    for pattern in inv_patterns:
-        matches = re.findall(pattern, text, re.IGNORECASE)
-        for match in matches:
-            full_number = f"C{match[0]}{match[1]}"
+        if 6 <= len(full_number) <= 7 and is_valid_invoice_range(full_number):
             invoice_numbers.add(full_number)
     
-    # Method 5: Line-by-line reconstruction
+    # Remove ALL whitespace and find C followed by 6-7 total chars
+    text_no_whitespace = re.sub(r'\s+', '', text)
+    all_c_numbers = re.findall(r'C\d{5,6}', text_no_whitespace)
+    for num in all_c_numbers:
+        if len(num) == 6 or len(num) == 7:
+            if is_valid_invoice_range(num):
+                invoice_numbers.add(num)
+    
+    # Line-by-line reconstruction
     lines = text.split('\n')
     for i, line in enumerate(lines):
-        # Look for line ending with C followed by 1-2 digits
-        if re.search(r'C\d{1,2}$', line.strip(), re.IGNORECASE):
-            partial_match = re.search(r'C(\d{1,2})$', line.strip(), re.IGNORECASE)
-            if partial_match:
-                partial = partial_match.group(1)
-                if i + 1 < len(lines):
-                    next_line = lines[i + 1].strip()
-                    remaining_match = re.search(r'^(\d{3,})', next_line)
-                    if remaining_match:
-                        full_number = f"C{partial}{remaining_match.group(1)}"
-                        invoice_numbers.add(full_number)
-        
-        # Look for line containing INV.NO. with partial C number
-        if re.search(r'INV\.NO\.', line, re.IGNORECASE):
-            partial_match = re.search(r'C(\d{1,2})$', line.strip(), re.IGNORECASE)
-            if partial_match:
-                partial = partial_match.group(1)
+        if re.search(r'INV\.NO\.C', line, re.IGNORECASE):
+            c_match = re.search(r'C(\d+)$', line.strip(), re.IGNORECASE)
+            if c_match:
+                partial = c_match.group(1)
                 for offset in range(1, 4):
                     if i + offset < len(lines):
                         next_line = lines[i + offset].strip()
-                        remaining_match = re.search(r'^(\d{3,})', next_line)
+                        remaining_match = re.search(r'^(\d+)', next_line)
                         if remaining_match:
                             full_number = f"C{partial}{remaining_match.group(1)}"
-                            invoice_numbers.add(full_number)
+                            if 6 <= len(full_number) <= 7 and is_valid_invoice_range(full_number):
+                                invoice_numbers.add(full_number)
                             break
     
-    # Method 6: Handle contiguous patterns already complete
-    contiguous_matches = re.findall(r'C\d{5,}', text)
-    invoice_numbers.update(contiguous_matches)
+    # Direct pattern for Cxxxxx followed by newline then digits
+    direct_split = r'C(\d{5,6})\s*\n\s*(\d+)'
+    matches = re.findall(direct_split, text, re.IGNORECASE)
+    for match in matches:
+        full_number = f"C{match[0]}{match[1]}"
+        if len(full_number) <= 7 and is_valid_invoice_range(full_number):
+            invoice_numbers.add(full_number)
     
-    # Clean and validate
+    # Clean and validate - remove incomplete numbers
     valid_numbers = set()
     for inv in invoice_numbers:
-        match = re.search(r'(C\d{5,})', inv, re.IGNORECASE)
-        if match:
-            valid_numbers.add(match.group(1).upper())
+        if 6 <= len(inv) <= 7 and is_valid_invoice_range(inv):
+            valid_numbers.add(inv.upper())
     
-    return sorted(list(valid_numbers))
+    # Remove prefixes (C26149 is prefix of C261490)
+    final_numbers = set()
+    numbers_list = list(valid_numbers)
+    for num in numbers_list:
+        is_prefix = False
+        for other in numbers_list:
+            if num != other and other.startswith(num):
+                is_prefix = True
+                break
+        if not is_prefix:
+            final_numbers.add(num)
+    
+    return sorted(list(final_numbers))
 
 def split_pdf_by_invoices(pdf_file, invoice_numbers, suffix="_FCR"):
     """Split PDF into separate files per invoice number"""
@@ -130,71 +131,34 @@ def split_pdf_by_invoices(pdf_file, invoice_numbers, suffix="_FCR"):
     
     return invoice_pdfs
 
-def create_zip_with_folders(pdf_dict_by_file):
-    """Create ZIP file with folder structure"""
+def create_zip_flat(pdf_parts):
+    """Create ZIP file with flat structure (no folders)"""
     zip_buffer = BytesIO()
-    
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for filename, pdf_parts in pdf_dict_by_file.items():
+        for filename, content in pdf_parts.items():
+            zip_file.writestr(filename, content)
+    zip_buffer.seek(0)
+    return zip_buffer
+
+def create_zip_with_folders(selected_files_data):
+    """Create ZIP file with folder structure (each file in its own folder)"""
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for filename, file_data in selected_files_data.items():
             folder_name = filename.replace('.pdf', '')
-            for pdf_name, pdf_content in pdf_parts.items():
+            for pdf_name, pdf_content in file_data['pdf_parts'].items():
                 zip_file.writestr(f"{folder_name}/{pdf_name}", pdf_content)
-    
     zip_buffer.seek(0)
     return zip_buffer
-
-def create_zip_flat(pdf_dict_by_file):
-    """Create ZIP file with NO folders (flat structure)"""
-    zip_buffer = BytesIO()
-    
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for filename, pdf_parts in pdf_dict_by_file.items():
-            for pdf_name, pdf_content in pdf_parts.items():
-                # Handle potential duplicate filenames from different source files
-                # Add source file prefix only if duplicate exists
-                zip_file.writestr(pdf_name, pdf_content)
-    
-    zip_buffer.seek(0)
-    return zip_buffer
-
-def create_combined_zip_with_folders(selected_zips):
-    """Create combined ZIP from multiple files with folder structure"""
-    combined_zip = BytesIO()
-    
-    with zipfile.ZipFile(combined_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for filename, pdf_parts in selected_zips.items():
-            folder_name = filename.replace('.pdf', '')
-            for pdf_name, pdf_content in pdf_parts.items():
-                zf.writestr(f"{folder_name}/{pdf_name}", pdf_content)
-    
-    combined_zip.seek(0)
-    return combined_zip
-
-def create_combined_zip_flat(selected_zips):
-    """Create combined ZIP from multiple files with NO folders (flat structure)"""
-    combined_zip = BytesIO()
-    
-    with zipfile.ZipFile(combined_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for filename, pdf_parts in selected_zips.items():
-            for pdf_name, pdf_content in pdf_parts.items():
-                # For flat structure, check for duplicates
-                if pdf_name in zf.namelist():
-                    # If duplicate, add source file prefix
-                    folder_name = filename.replace('.pdf', '')
-                    new_name = f"{folder_name}_{pdf_name}"
-                    zf.writestr(new_name, pdf_content)
-                else:
-                    zf.writestr(pdf_name, pdf_content)
-    
-    combined_zip.seek(0)
-    return combined_zip
 
 # Initialize session state
 if 'processed_files' not in st.session_state:
     st.session_state.processed_files = {}
+if 'selected_files' not in st.session_state:
+    st.session_state.selected_files = []
 
 if uploaded_files:
-    st.subheader(f"📁 Processing {len(uploaded_files)} file(s)")
+    st.subheader(f"📁 {len(uploaded_files)} file(s) uploaded")
     
     process_button = st.button("🔄 Process All Files", type="primary")
     
@@ -236,144 +200,143 @@ if uploaded_files:
             progress_bar.progress((i + 1) / len(uploaded_files))
         
         status_text.text("✅ All files processed successfully!")
+        st.session_state.selected_files = []
         st.rerun()
     
-    # Display processed files
+    # Display processed files with selection
     if st.session_state.processed_files:
-        st.subheader("📋 Processed Files - Select which ZIPs to download")
+        st.subheader("📋 Select Files to Download")
         
-        selected_zips = {}
+        # Create list of filenames that have invoices
+        file_options = []
+        file_info = {}
         
         for filename, file_data in st.session_state.processed_files.items():
-            if file_data['processed']:
-                invoice_count = len(file_data['invoice_numbers'])
-                pdf_count = len(file_data['pdf_parts'])
-                
-                if invoice_count > 0:
-                    with st.expander(f"📄 {filename} - {invoice_count} invoices found", expanded=False):
-                        col1, col2, col3 = st.columns([2, 1, 1])
-                        
-                        with col1:
-                            invoices_list = file_data['invoice_numbers']
-                            st.write(f"**Invoices found:** {', '.join(invoices_list)}")
-                            st.write(f"**PDFs to generate:** {pdf_count} files")
-                        
-                        with col2:
-                            select = st.checkbox(f"Select for download", key=f"select_{filename}")
-                            if select:
-                                selected_zips[filename] = file_data['pdf_parts']
-                        
-                        with col3:
-                            if pdf_count > 0:
-                                sample_files = list(file_data['pdf_parts'].keys())[:3]
-                                st.write("**Sample files:**")
-                                for f in sample_files:
-                                    st.code(f, language="text")
-                                if pdf_count > 3:
-                                    st.write(f"... and {pdf_count - 3} more")
-                        
-                        with st.expander("🔍 Debug: Show raw text (first 500 chars)"):
-                            st.text(file_data.get('raw_text_preview', 'No preview available'))
+            if file_data['processed'] and len(file_data['invoice_numbers']) > 0:
+                invoice_list = ', '.join(file_data['invoice_numbers'])
+                display_text = f"{filename} | Invoices: {invoice_list}"
+                file_options.append(display_text)
+                file_info[display_text] = {
+                    'filename': filename,
+                    'data': file_data
+                }
         
-        # Display summary
-        if selected_zips:
-            st.success(f"✅ {len(selected_zips)} file(s) selected for download")
+        if file_options:
+            # Use multiselect for selection
+            selected_display = st.multiselect(
+                "Select files to download:",
+                options=file_options,
+                default=None,
+                help="Click to select files, or use buttons below"
+            )
             
-            st.subheader("📥 Download Options")
+            # Update selected_files based on selections
+            current_selected = [file_info[opt]['filename'] for opt in selected_display]
+            st.session_state.selected_files = current_selected
             
-            # Individual file downloads (per selected file)
-            st.markdown("### 📄 Individual File Downloads")
-            for filename, pdf_parts in selected_zips.items():
-                st.markdown(f"**{filename}**")
+            # Selection control buttons
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("✅ Select All", use_container_width=True):
+                    all_selected = [opt for opt in file_options]
+                    st.session_state.selected_files = [file_info[opt]['filename'] for opt in all_selected]
+                    st.rerun()
+            
+            with col2:
+                if st.button("❌ Deselect All", use_container_width=True):
+                    st.session_state.selected_files = []
+                    st.rerun()
+            
+            with col3:
+                selected_count = len(st.session_state.selected_files)
+                st.markdown(f"**Selected: {selected_count} file(s)**")
+            
+            st.markdown("---")
+            
+            # Show selected files with their invoices
+            if st.session_state.selected_files:
+                st.subheader(f"📌 Selected Files ({len(st.session_state.selected_files)})")
+                for filename in st.session_state.selected_files:
+                    if filename in st.session_state.processed_files:
+                        file_data = st.session_state.processed_files[filename]
+                        invoices_list = ', '.join(file_data['invoice_numbers'])
+                        st.markdown(f"- **{filename}** → {invoices_list}")
+                
+                st.markdown("---")
+                st.subheader("📥 Download Options")
+                
+                # Prepare selected files data
+                selected_files_data = {}
+                for filename in st.session_state.selected_files:
+                    if filename in st.session_state.processed_files:
+                        selected_files_data[filename] = st.session_state.processed_files[filename]
+                
+                # Count total PDFs
+                total_pdfs = sum(len(data['pdf_parts']) for data in selected_files_data.values())
+                
+                # Download options - Flat and With Folders
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    # With folder structure
-                    single_with_folders = BytesIO()
-                    with zipfile.ZipFile(single_with_folders, 'w', zipfile.ZIP_DEFLATED) as zf:
-                        folder_name = filename.replace('.pdf', '')
-                        for pdf_name, pdf_content in pdf_parts.items():
-                            zf.writestr(f"{folder_name}/{pdf_name}", pdf_content)
-                    single_with_folders.seek(0)
+                    # Flat ZIP (no folders)
+                    flat_zip = create_zip_flat({})
+                    flat_pdfs = {}
+                    for filename, file_data in selected_files_data.items():
+                        for pdf_name, pdf_content in file_data['pdf_parts'].items():
+                            flat_pdfs[f"{filename.replace('.pdf', '')}_{pdf_name}"] = pdf_content
                     
-                    st.download_button(
-                        label=f"📁 With folder",
-                        data=single_with_folders,
-                        file_name=f"{filename.replace('.pdf', '')}_with_folders.zip",
-                        mime="application/zip",
-                        key=f"single_folder_{filename}"
-                    )
+                    if flat_pdfs:
+                        flat_zip = create_zip_flat(flat_pdfs)
+                        st.download_button(
+                            label=f"📄 Flat ZIP ({total_pdfs} files - no folders)",
+                            data=flat_zip,
+                            file_name="selected_invoices_flat.zip",
+                            mime="application/zip",
+                            key="flat_download",
+                            use_container_width=True
+                        )
+                        st.caption("All PDFs directly in ZIP root")
                 
                 with col2:
-                    # Flat (no folders)
-                    single_flat = BytesIO()
-                    with zipfile.ZipFile(single_flat, 'w', zipfile.ZIP_DEFLATED) as zf:
-                        for pdf_name, pdf_content in pdf_parts.items():
-                            zf.writestr(pdf_name, pdf_content)
-                    single_flat.seek(0)
-                    
-                    st.download_button(
-                        label=f"📄 Flat (no folders)",
-                        data=single_flat,
-                        file_name=f"{filename.replace('.pdf', '')}_flat.zip",
-                        mime="application/zip",
-                        key=f"single_flat_{filename}"
-                    )
+                    # With Folders ZIP
+                    if selected_files_data:
+                        folders_zip = create_zip_with_folders(selected_files_data)
+                        st.download_button(
+                            label=f"📁 Folders ZIP ({total_pdfs} files - with folders)",
+                            data=folders_zip,
+                            file_name="selected_invoices_with_folders.zip",
+                            mime="application/zip",
+                            key="folders_download",
+                            use_container_width=True
+                        )
+                        st.caption("Each file in its own folder")
             
-            # Combined downloads (all selected files together)
-            if len(selected_zips) > 1:
-                st.markdown("### 📦 Combined Downloads (All Selected Files)")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Combined with folder structure
-                    combined_folders = create_combined_zip_with_folders(selected_zips)
-                    st.download_button(
-                        label=f"📁 Combined ZIP - With folders",
-                        data=combined_folders,
-                        file_name="all_selected_with_folders.zip",
-                        mime="application/zip"
-                    )
-                
-                with col2:
-                    # Combined flat (no folders)
-                    combined_flat = create_combined_zip_flat(selected_zips)
-                    st.download_button(
-                        label=f"📄 Combined ZIP - Flat (no folders)",
-                        data=combined_flat,
-                        file_name="all_selected_flat.zip",
-                        mime="application/zip"
-                    )
-            
-            # Show summary table of extracted invoices
-            st.subheader("📊 Extracted Invoice Numbers Summary")
-            summary_data = []
+            # Display each file details
+            st.markdown("---")
+            st.subheader("📄 Available Files")
             for filename, file_data in st.session_state.processed_files.items():
-                if file_data['invoice_numbers']:
-                    for invoice in file_data['invoice_numbers']:
-                        summary_data.append({
-                            "Source File": filename,
-                            "Invoice Number": invoice,
-                            "Output File": f"{invoice}{'_' + custom_suffix if add_suffix else ''}.pdf"
-                        })
-            
-            if summary_data:
-                import pandas as pd
-                df = pd.DataFrame(summary_data)
-                st.dataframe(df, use_container_width=True, hide_index=True)
-                
-                # Download summary as CSV
-                csv = df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📄 Download Summary CSV",
-                    data=csv,
-                    file_name="invoice_summary.csv",
-                    mime="text/csv"
-                )
-                
+                if file_data['processed'] and len(file_data['invoice_numbers']) > 0:
+                    invoice_count = len(file_data['invoice_numbers'])
+                    pdf_count = len(file_data['pdf_parts'])
+                    invoices_list = ', '.join(file_data['invoice_numbers'])
+                    
+                    with st.expander(f"📄 {filename}"):
+                        st.markdown(f"**Invoices found:** {invoices_list}")
+                        st.markdown(f"**PDFs to generate:** {pdf_count} files")
+                        
+                        # Preview PDF names
+                        sample_files = list(file_data['pdf_parts'].keys())[:5]
+                        st.markdown("**Sample output files:**")
+                        for f in sample_files:
+                            st.code(f, language="text")
+                        if pdf_count > 5:
+                            st.caption(f"... and {pdf_count - 5} more")
         else:
-            st.info("💡 Select the files you want to download using the checkboxes above")
+            st.warning("No invoices found in any uploaded file")
         
-        if st.button("🗑️ Clear All Processed Data"):
+        # Clear data button
+        if st.button("🗑️ Clear All Data", type="secondary"):
             st.session_state.processed_files = {}
+            st.session_state.selected_files = []
             st.rerun()
