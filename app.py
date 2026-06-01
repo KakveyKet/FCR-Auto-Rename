@@ -131,12 +131,15 @@ def split_pdf_by_invoices(pdf_file, invoice_numbers, suffix="_FCR"):
     
     return invoice_pdfs
 
-def create_zip_flat(pdf_parts):
-    """Create ZIP file with flat structure (no folders)"""
+def create_zip_flat(selected_files_data):
+    """Create ZIP file with flat structure - just invoice numbers as filenames"""
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for filename, content in pdf_parts.items():
-            zip_file.writestr(filename, content)
+        for filename, file_data in selected_files_data.items():
+            for pdf_name, pdf_content in file_data['pdf_parts'].items():
+                # Use just the invoice filename (e.g., C263132_FCR.pdf)
+                # No source file prefix
+                zip_file.writestr(pdf_name, pdf_content)
     zip_buffer.seek(0)
     return zip_buffer
 
@@ -279,15 +282,9 @@ if uploaded_files:
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    # Flat ZIP (no folders)
-                    flat_zip = create_zip_flat({})
-                    flat_pdfs = {}
-                    for filename, file_data in selected_files_data.items():
-                        for pdf_name, pdf_content in file_data['pdf_parts'].items():
-                            flat_pdfs[f"{filename.replace('.pdf', '')}_{pdf_name}"] = pdf_content
-                    
-                    if flat_pdfs:
-                        flat_zip = create_zip_flat(flat_pdfs)
+                    # Flat ZIP (no folders) - JUST invoice names, no prefix
+                    if selected_files_data:
+                        flat_zip = create_zip_flat(selected_files_data)
                         st.download_button(
                             label=f"📄 Flat ZIP ({total_pdfs} files - no folders)",
                             data=flat_zip,
@@ -296,7 +293,7 @@ if uploaded_files:
                             key="flat_download",
                             use_container_width=True
                         )
-                        st.caption("All PDFs directly in ZIP root")
+                        st.caption("Files: C263132_FCR.pdf, C263133_FCR.pdf (no prefix)")
                 
                 with col2:
                     # With Folders ZIP
@@ -340,3 +337,24 @@ if uploaded_files:
             st.session_state.processed_files = {}
             st.session_state.selected_files = []
             st.rerun()
+
+# else:
+#     st.info("👆 Upload one or more PDF files to get started")
+    
+#     st.markdown("---")
+#     st.markdown("### How to use")
+#     st.markdown("""
+#     1. **Upload** one or more PDF files
+#     2. **Click** "Process All Files" to extract invoice numbers
+#     3. **Select** files using the multiselect box
+#     4. **Choose download format:**
+#        - **Flat ZIP** - Files named like `C263132_FCR.pdf` (no prefix)
+#        - **Folders ZIP** - Files in folders: `filename/C263132_FCR.pdf`
+#     5. **Click** download button to save
+    
+#     **✅ Complete invoice numbers only (C26-C29):**
+#     - `C261490` ✅
+#     - `C262465` ✅
+#     - `C263036` ✅
+#     - `C260952` ✅
+#     """)
